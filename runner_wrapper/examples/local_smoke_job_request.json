@@ -22,5 +22,5 @@
       "sample-1": {"image": "/data/datasets/smoke/dreamscene360-alley.png"}
     }
   },
-  "runtime": {"output_dir": "/data/output/dreamscene360@0.1.0/smoke/sample-1"}
+  "runtime": {"output_dir": "/data/output/dreamscene360@0.1.1/smoke/sample-1"}
 }

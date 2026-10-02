@@ -94,6 +94,10 @@ class AdapterTests(unittest.TestCase):
             }
 
             def train(command, **kwargs):
+                self.assertEqual(
+                    kwargs["env"]["TCNN_RTC_CACHE_DIR"],
+                    str(workspace / "tinycudann-rtc"),
+                )
                 model = Path(command[command.index("-m") + 1])
                 exported = model / "point_cloud/iteration_10000/point_cloud.ply"
                 exported.parent.mkdir(parents=True)

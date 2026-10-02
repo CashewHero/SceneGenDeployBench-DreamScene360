@@ -1,8 +1,8 @@
 # DreamScene360 DeployBench runner
 
-`dreamscene360@0.1.0` is a generator that accepts one full 2:1 equirectangular panorama `image` and produces a degree-3 Gaussian PLY as `3dgs`. The adapter stages a PNG in the job workspace and launches the repository's `train.py`. It preserves Omnidata depth prediction, panoramic hash-grid depth alignment, Gaussian optimization, and the original depth and DINOv2 regularization stages. It does not run text-to-panorama generation or GPT prompt refinement.
+`dreamscene360@0.1.1` is a generator that accepts one full 2:1 equirectangular panorama `image` and produces a degree-3 Gaussian PLY as `3dgs`. The adapter stages a PNG in the job workspace and launches the repository's `train.py`. It preserves Omnidata depth prediction, panoramic hash-grid depth alignment, Gaussian optimization, and the original depth and DINOv2 regularization stages. It does not run text-to-panorama generation or GPT prompt refinement.
 
-The distributable catalog is [config/runners/dreamscene360.yaml](config/runners/dreamscene360.yaml). Copy it to the deployment's runner-config directory. The image is `ghcr.io/cashewhero/scenegendeploybench-dreamscene360:0.1.0`. The [Runner API](docs/api.md) defines the shared HTTP and filesystem contract.
+The distributable catalog is [config/runners/dreamscene360.yaml](config/runners/dreamscene360.yaml). Copy it to the deployment's runner-config directory. The image is `ghcr.io/cashewhero/scenegendeploybench-dreamscene360:0.1.1`. The [Runner API](docs/api.md) defines the shared HTTP and filesystem contract.
 
 ## Defaults and lighter jobs
 
@@ -33,6 +33,8 @@ Downloads use a shared file lock and atomic publication. No token or OpenAI API 
 
 The image uses CUDA 12.4 and the upstream documented Torch 2.4.0. It builds the repository's depth rasterizer and simple-knn extensions, plus a pinned tiny-cuda-nn hash-grid encoding, for SM 75, 80, 86, and 89. The rasterizer includes compute-89 PTX. The multi-stage runtime image excludes compilers, training datasets, panorama diffusion dependencies, and viewers. Research/evaluation use is subject to the repository's [LICENSE.md](../LICENSE.md).
 
+Version 0.1.1 patches the pinned tiny-cuda-nn package to honor `TCNN_RTC_CACHE_DIR`. Training uses a cache inside `runtime.workspace_dir`, not the root-owned package installation. This cache is temporary and is not published. Checkpoints still use `publish_file`, and the shared server publishes job outputs. The image uses `/tmp/tinycudann-rtc` for imports outside a job. No model settings or training losses change.
+
 ## Local build and smoke
 
 From the repository root:
@@ -52,9 +54,9 @@ DREAMSCENE360_OMNIDATA_CHECKPOINT=/data/model_cache/pano2room/checkpoints/omnida
 runner_wrapper/localtest.sh smoke
 ```
 
-Set `RUNNER_CONTAINER` to a fresh name if the default local-test container already exists. `runner_wrapper/localtest.sh down` stops it. Published files appear under `output/dreamscene360@0.1.0/smoke/sample-1` in the data mount. They include the Gaussian PLY, job log, and metrics JSON. Source panorama, intermediate COLMAP data, and downloaded archives stay job-local.
+The helper runs as the host UID/GID, matching DeployBench's non-root Docker launcher. Mounted cache and output directories must be writable by that user. `RUNNER_USER` can override the UID/GID. Set `RUNNER_CONTAINER` to a fresh name if the default local-test container already exists. `runner_wrapper/localtest.sh down` stops it. Published files appear under `output/dreamscene360@0.1.1/smoke/sample-1` in the data mount. They include the Gaussian PLY, job log, and metrics JSON. Source panorama, intermediate COLMAP data, and downloaded archives stay job-local.
 
-The RTX 2080 Ti smoke passed in 123 seconds with 131,072 finite Gaussians and about 5.5GiB peak GPU memory. DeployBench's fr-iqa renderer loaded the exported PLY and rendered finite RGB, radial depth, and alpha. Mean alpha was 0.895. The test reused the exact cached Omnidata checkpoint and downloaded the official DINOv2 weights.
+The 0.1.1 RTX 2080 Ti smoke passed as UID/GID 1000:1000 in 124 seconds with 131,072 finite Gaussians and about 5.5GiB peak GPU memory. It reused the exact cached Omnidata and official DINOv2 checkpoints. A separate tiny-cuda-nn import check passed as non-root with a read-only root filesystem. DeployBench's fr-iqa renderer loaded the exported PLY and rendered finite RGB, radial depth, and alpha. Mean alpha was 0.895.
 
 Output metadata reports `scene_coordinate_system: FLU` and `scene_scale: 1.0`. The upstream panorama center faces +X, image-right is -Y, and image-up is +Z. The scene uses normalized relative depth, not metric units. The scale is uncalibrated and should be calibrated before cross-view benchmark comparisons.
 

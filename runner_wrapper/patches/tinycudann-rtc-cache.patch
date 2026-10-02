@@ -1,0 +1,8 @@
+diff --git a/tinycudann/modules.py b/tinycudann/modules.py
+--- a/tinycudann/modules.py
++++ b/tinycudann/modules.py
+@@ -81,3 +81,3 @@
+-_rtc_cache_dir = os.path.join(_rtc_dir, "cache")
++_rtc_cache_dir = os.environ.get("TCNN_RTC_CACHE_DIR", os.path.join(_rtc_dir, "cache"))
+ os.makedirs(_rtc_cache_dir, exist_ok=True)
+ _C.rtc_set_cache_dir(_rtc_cache_dir)

@@ -23,7 +23,7 @@ DINO_URL = (
 def _download(url: str, path: Path) -> None:
     print(f"Downloading {path.name}", flush=True)
     request = urllib.request.Request(
-        url, headers={"User-Agent": "DeployBench-DreamScene360/0.1.0"}
+        url, headers={"User-Agent": "DeployBench-DreamScene360"}
     )
     with (
         urllib.request.urlopen(request, timeout=120) as response,

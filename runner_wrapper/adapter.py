@@ -185,7 +185,11 @@ def run_job(request: dict[str, Any]) -> dict[str, Any]:
             run_logged_command(
                 _command(source_dir, model_dir, parameters),
                 cwd=Path(__file__).resolve().parents[1],
-                env={**os.environ, "TQDM_MININTERVAL": "10"},
+                env={
+                    **os.environ,
+                    "TQDM_MININTERVAL": "10",
+                    "TCNN_RTC_CACHE_DIR": str(workspace / "tinycudann-rtc"),
+                },
             )
             generated = (
                 model_dir

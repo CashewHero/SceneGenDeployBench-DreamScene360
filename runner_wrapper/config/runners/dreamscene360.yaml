@@ -1,7 +1,7 @@
 catalog_version: 1
 runners:
   - runner: dreamscene360
-    version: 0.1.0
+    version: 0.1.1
     latest: true
     display_name: DreamScene360 panorama to 3DGS
     kind: generator
@@ -24,7 +24,7 @@ runners:
     launcher:
       driver: docker
       compat_version: 1
-      image: ghcr.io/cashewhero/scenegendeploybench-dreamscene360:0.1.0
+      image: ghcr.io/cashewhero/scenegendeploybench-dreamscene360:0.1.1
       endpoint:
         port: 58090
       gpus: device=0

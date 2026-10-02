@@ -17,7 +17,7 @@ HOST_PORT="${RUNNER_HOST_PORT:-58090}"
 DATA_DIR="${RUNNER_DATA_DIR:-${REPO_ROOT}/data}"
 RUNNER_NAME="${RUNNER_NAME:-dreamscene360}"
 RUNNER_TYPE="${RUNNER_TYPE:-generator}"
-RUNNER_VERSION="${RUNNER_VERSION:-0.1.0}"
+RUNNER_VERSION="${RUNNER_VERSION:-0.1.1}"
 RUNNER_ADAPTER="${RUNNER_ADAPTER:-runner_wrapper.adapter:run_job}"
 REQUEST_FILE="${RUNNER_REQUEST_FILE:-${SCRIPT_DIR}/examples/local_smoke_job_request.json}"
 
@@ -42,6 +42,7 @@ Environment:
   RUNNER_ADAPTER=${RUNNER_ADAPTER}
   RUNNER_REQUEST_FILE=${REQUEST_FILE}
   RUNNER_DATA_DIR=${DATA_DIR}
+  RUNNER_USER=${RUNNER_USER:-$(id -u):$(id -g)}
 
 The default smoke uses the upstream alley panorama at lower resolution.
 RUNNER_GPUS selects the Docker GPU devices, all by default.
@@ -95,6 +96,8 @@ run_container() {
     -e "PATH_MODEL_CACHE=/data/model_cache"
     -e "PATH_OUTPUT=/data/output"
     -e "PATH_PIPELINES=/data/pipelines"
+    -e "HOME=/tmp"
+    -e "XDG_CACHE_HOME=/tmp/.cache"
   )
 
   if [[ -n "${DREAMSCENE360_OMNIDATA_CHECKPOINT:-}" ]]; then
@@ -106,6 +109,7 @@ run_container() {
 
   docker run -d \
     --name "${CONTAINER}" \
+    --user "${RUNNER_USER:-$(id -u):$(id -g)}" \
     --gpus "${RUNNER_GPUS:-all}" \
     -p "${HOST_PORT}:58090" \
     "${env_args[@]}" \

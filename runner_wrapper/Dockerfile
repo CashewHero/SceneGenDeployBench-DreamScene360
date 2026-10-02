@@ -31,6 +31,12 @@ RUN git clone https://github.com/facebookresearch/dinov2.git /opt/dinov2 \
 COPY submodules /tmp/submodules
 RUN uv pip install --no-build-isolation /tmp/submodules/diff-gaussian-rasterization-depth /tmp/submodules/simple-knn
 
+# Keep runtime-generated files out of the root-owned package installation.
+COPY runner_wrapper/patches/tinycudann-rtc-cache.patch /tmp/tinycudann-rtc-cache.patch
+RUN cd /opt/runner/lib/python3.10/site-packages \
+    && git apply --check /tmp/tinycudann-rtc-cache.patch \
+    && git apply /tmp/tinycudann-rtc-cache.patch
+
 FROM nvidia/cuda:12.4.1-base-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -58,11 +64,12 @@ ENV VIRTUAL_ENV=/opt/runner \
     RUNNER_PORT=58090 \
     RUNNER_NAME=dreamscene360 \
     RUNNER_TYPE=generator \
-    RUNNER_VERSION=0.1.0 \
+    RUNNER_VERSION=0.1.1 \
     RUNNER_CONTRACT_VERSION=1 \
     RUNNER_IDLE_TIMEOUT_SECONDS=900 \
     RUNNER_ADAPTER=runner_wrapper.adapter:run_job \
-    DREAMSCENE360_DINO_SOURCE=/opt/dinov2
+    DREAMSCENE360_DINO_SOURCE=/opt/dinov2 \
+    TCNN_RTC_CACHE_DIR=/tmp/tinycudann-rtc
 RUN python -c "from diff_gaussian_rasterization import GaussianRasterizer; from simple_knn._C import distCUDA2; import runner_wrapper.adapter"
 EXPOSE 58090
 CMD ["python", "-m", "runner_wrapper.server"]

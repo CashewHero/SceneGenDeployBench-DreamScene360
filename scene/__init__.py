@@ -227,12 +227,16 @@ class Scene:
             # if img.shape[:2] != (512, 1024):
             #     img = cv.resize(img.cpu().numpy(), (1024, 512), cv.INTER_AREA)
             #     img = torch.from_numpy(img).cuda()
-            img = cv.resize(img.cpu().numpy(), (2048, 1024), cv.INTER_AREA)
+            pano_width = getattr(args, 'pano_width', 2048)
+            img = cv.resize(img.cpu().numpy(), (pano_width, pano_width // 2), cv.INTER_AREA)
             img = torch.from_numpy(img).cuda()
             
-            geo_predictor = PanoGeoPredictor()
+            perspective_size = getattr(args, 'perspective_size', 512)
+            geo_predictor = PanoGeoPredictor(img_size=perspective_size)
             height, width, _ = img.shape
-            distances, rot_w2c, fx, fy, cx, cy, pers_imgs = geo_predictor(img)
+            distances, rot_w2c, fx, fy, cx, cy, pers_imgs = geo_predictor(
+                img, gen_res=perspective_size,
+                geometry_iterations=getattr(args, 'geometry_iterations', 1500))
             pts = pcd_from_depths(img, distances, height, width, args.source_path)
             print('Saving data for future use...')
             save_data(args.source_path, img, distances, rot_w2c, fx, fy, cx, cy, pers_imgs, pts)

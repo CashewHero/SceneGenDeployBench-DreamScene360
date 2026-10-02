@@ -54,6 +54,10 @@ class ModelParams(ParamGroup):
         self._white_background = False
         self.data_device = "cuda"
         self.eval = False
+        # Optional runner controls retain the original panorama defaults.
+        self.pano_width = 2048
+        self.perspective_size = 512
+        self.geometry_iterations = 1500
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):

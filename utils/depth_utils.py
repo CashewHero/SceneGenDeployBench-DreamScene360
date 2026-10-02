@@ -11,7 +11,7 @@ from omnidata.modules.midas.dpt_depth import DPTDepthModel
 
 downsampling = 1
 img_size = 512
-ckpt_path = 'pre_checkpoints/omnidata_dpt_depth_v2.ckpt'
+ckpt_path = os.getenv('DREAMSCENE360_OMNIDATA_CHECKPOINT', 'pre_checkpoints/omnidata_dpt_depth_v2.ckpt')
 model = DPTDepthModel(backbone='vitb_rn50_384', num_channels=1)
 model.to(torch.device('cpu'))
 checkpoint = torch.load(ckpt_path, map_location=torch.device('cpu'))

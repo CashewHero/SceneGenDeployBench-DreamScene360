@@ -1,0 +1,34 @@
+catalog_version: 1
+runners:
+  - runner: dreamscene360
+    version: 0.1.0
+    latest: true
+    display_name: DreamScene360 panorama to 3DGS
+    kind: generator
+    contract_version: 1
+    inputs:
+      data:
+        required_sample:
+          required_datatype: [image]
+    job_parameters:
+      pano_width: 2048
+      perspective_size: 512
+      geometry_iterations: 1500
+      iterations: 10000
+      data_device: cuda
+    scheduling:
+      max_batch_size: 4
+      max_attempts: 2
+      job_timeout_minutes: 120
+      startup_timeout_minutes: 5
+    launcher:
+      driver: docker
+      compat_version: 1
+      image: ghcr.io/cashewhero/scenegendeploybench-dreamscene360:0.1.0
+      endpoint:
+        port: 58090
+      gpus: device=0
+      env:
+        OMP_NUM_THREADS: "4"
+        # Optionally reuse a checkpoint instead of the first-run download:
+        # DREAMSCENE360_OMNIDATA_CHECKPOINT: /data/model_cache/dreamscene360/omnidata_dpt_depth_v2.ckpt

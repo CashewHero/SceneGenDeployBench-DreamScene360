@@ -24,7 +24,12 @@ Abstract: *The increasing demand for virtual reality applications has highlighte
 
 
 
+# DeployBench runner
+
+This fork includes the `dreamscene360` generator runner. It accepts one full equirectangular panorama `image` and produces the upstream trained Gaussian PLY as `3dgs`. Defaults match the panorama-to-3D code, with optional lower-cost settings. See [runner_wrapper/README.md](runner_wrapper/README.md) for the catalog, checkpoints, Docker build, and local smoke test.
+
 # Environment setup
+
 Create Environment:
 ```shell
 conda create --name dreamscene360 python=3.8

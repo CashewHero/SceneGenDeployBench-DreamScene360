@@ -1,4 +1,5 @@
 import torch
+import os
 import torch.nn.functional as F
 from torchvision import transforms
 
@@ -9,10 +10,10 @@ from .geo_predictor import GeoPredictor
 from .omnidata.modules.midas.dpt_depth import DPTDepthModel
 
 class OmnidataPredictor(GeoPredictor):
-    def __init__(self):
+    def __init__(self, img_size=512):
         super().__init__()
-        self.img_size = 512 ### 384 sz: try 512
-        ckpt_path = 'pre_checkpoints/omnidata_dpt_depth_v2.ckpt'
+        self.img_size = img_size
+        ckpt_path = os.getenv('DREAMSCENE360_OMNIDATA_CHECKPOINT', 'pre_checkpoints/omnidata_dpt_depth_v2.ckpt')
         self.model = DPTDepthModel(backbone='vitb_rn50_384', num_channels=1)
         self.model.to(torch.device('cpu'))
         checkpoint = torch.load(ckpt_path, map_location=torch.device('cpu'))

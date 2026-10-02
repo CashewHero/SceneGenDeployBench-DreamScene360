@@ -15,11 +15,11 @@ IMAGE="${RUNNER_IMAGE:-${repo_name}-runner:local}"
 CONTAINER="${RUNNER_CONTAINER:-${repo_name}-runner-localtest}"
 HOST_PORT="${RUNNER_HOST_PORT:-58090}"
 DATA_DIR="${RUNNER_DATA_DIR:-${REPO_ROOT}/data}"
-RUNNER_NAME="${RUNNER_NAME:-${repo_name}-runner}"
+RUNNER_NAME="${RUNNER_NAME:-dreamscene360}"
 RUNNER_TYPE="${RUNNER_TYPE:-generator}"
 RUNNER_VERSION="${RUNNER_VERSION:-0.1.0}"
 RUNNER_ADAPTER="${RUNNER_ADAPTER:-runner_wrapper.adapter:run_job}"
-REQUEST_FILE="${RUNNER_REQUEST_FILE:-${SCRIPT_DIR}/examples/${RUNNER_TYPE}_job_request.json}"
+REQUEST_FILE="${RUNNER_REQUEST_FILE:-${SCRIPT_DIR}/examples/local_smoke_job_request.json}"
 
 usage() {
   cat <<EOF
@@ -43,8 +43,9 @@ Environment:
   RUNNER_REQUEST_FILE=${REQUEST_FILE}
   RUNNER_DATA_DIR=${DATA_DIR}
 
-For the bundled test adapter, set TEST_RUNNER_MIN_SECONDS=0 and
-TEST_RUNNER_MAX_SECONDS=0 when you want a fast smoke run.
+The default smoke uses the upstream alley panorama at lower resolution.
+RUNNER_GPUS selects the Docker GPU devices, all by default.
+DREAMSCENE360_OMNIDATA_CHECKPOINT can reuse an existing checkpoint under /data.
 EOF
 }
 
@@ -70,25 +71,18 @@ prepare_data() {
   mkdir -p \
     "${DATA_DIR}/datasets/smoke" \
     "${DATA_DIR}/model_cache" \
-    "${DATA_DIR}/pipelines" \
-    "${DATA_DIR}/output/my-generator@0.1.0/smoke-dataset/sample-1"
-
-  if [[ ! -f "${DATA_DIR}/datasets/smoke/image.png" ]]; then
-    printf 'smoke input\n' > "${DATA_DIR}/datasets/smoke/image.png"
-  fi
-
-  if [[ ! -f "${DATA_DIR}/datasets/smoke/reference.png" ]]; then
-    printf 'smoke reference\n' > "${DATA_DIR}/datasets/smoke/reference.png"
-  fi
-
-  if [[ ! -f "${DATA_DIR}/output/my-generator@0.1.0/smoke-dataset/sample-1/scene.glb" ]]; then
-    printf 'smoke generated scene\n' > "${DATA_DIR}/output/my-generator@0.1.0/smoke-dataset/sample-1/scene.glb"
+    "${DATA_DIR}/pipelines"
+  if [[ ! -f "${DATA_DIR}/datasets/smoke/dreamscene360-alley.png" ]]; then
+    cp "${REPO_ROOT}/data/alley_pano/alley.png" "${DATA_DIR}/datasets/smoke/dreamscene360-alley.png"
   fi
 }
 
 run_container() {
   prepare_data
-  docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
+  if docker container inspect "${CONTAINER}" >/dev/null 2>&1; then
+    echo "container ${CONTAINER} already exists; use RUNNER_CONTAINER for a new name" >&2
+    exit 1
+  fi
 
   local env_args=(
     -e "RUNNER_PORT=58090"
@@ -103,11 +97,8 @@ run_container() {
     -e "PATH_PIPELINES=/data/pipelines"
   )
 
-  if [[ -n "${TEST_RUNNER_MIN_SECONDS:-}" ]]; then
-    env_args+=(-e "TEST_RUNNER_MIN_SECONDS=${TEST_RUNNER_MIN_SECONDS}")
-  fi
-  if [[ -n "${TEST_RUNNER_MAX_SECONDS:-}" ]]; then
-    env_args+=(-e "TEST_RUNNER_MAX_SECONDS=${TEST_RUNNER_MAX_SECONDS}")
+  if [[ -n "${DREAMSCENE360_OMNIDATA_CHECKPOINT:-}" ]]; then
+    env_args+=(-e "DREAMSCENE360_OMNIDATA_CHECKPOINT=${DREAMSCENE360_OMNIDATA_CHECKPOINT}")
   fi
   if [[ -n "${RUNNER_LOG_LEVEL:-}" ]]; then
     env_args+=(-e "RUNNER_LOG_LEVEL=${RUNNER_LOG_LEVEL}")
@@ -115,6 +106,7 @@ run_container() {
 
   docker run -d \
     --name "${CONTAINER}" \
+    --gpus "${RUNNER_GPUS:-all}" \
     -p "${HOST_PORT}:58090" \
     "${env_args[@]}" \
     -v "${DATA_DIR}:/data" \
@@ -212,7 +204,7 @@ main() {
       docker logs -f "${CONTAINER}"
       ;;
     down)
-      docker rm -f "${CONTAINER}" >/dev/null 2>&1 || true
+      docker stop "${CONTAINER}"
       ;;
     -h|--help|help)
       usage

@@ -48,7 +48,7 @@ class DPT(BaseModel):
         self.pretrained, self.scratch = _make_encoder(
             backbone,
             features,
-            True, # Set to true of you want to train from scratch, uses ImageNet weights
+            False, # The complete Omnidata checkpoint supplies the backbone weights.
             groups=1,
             expand=False,
             exportable=False,

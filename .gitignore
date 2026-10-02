@@ -5,5 +5,10 @@ diff_rasterization/diff_rast.egg-info
 diff_rasterization/dist
 *.ckpt
 *.pt
+*.pth
 *.safetensors
 *.DS_Store
+.env*
+.venv*
+model_cache/
+pre_checkpoints/

@@ -1,307 +1,259 @@
+"""Run upstream DreamScene360 panorama training through the shared runner API."""
+
 from __future__ import annotations
-
-"""Default adapter implementation.
-
-Replace this file or point RUNNER_ADAPTER at a different callable inside the
-model repository.
-"""
 
 import hashlib
 import json
-import logging
+import math
 import os
-import random
-import re
-import shutil
 import sys
 import time
 import traceback
 from pathlib import Path
 from typing import Any
 
-from runner_wrapper.job_logging import tee_job_output
+from runner_wrapper.job_logging import run_logged_command, tee_job_output
 from runner_wrapper.measurements import ResourceMonitor
+from runner_wrapper.weights import configure_weights
 
-logger = logging.getLogger("runner_wrapper.adapter")
-
-
-def event_message(event: str, **fields: object) -> str:
-    return json.dumps({"event": event, **fields}, sort_keys=True)
-
-
-def _safe_role(role: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in role)
-
-
-def _safe_name(value: Any, fallback: str) -> str:
-    name = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "").strip()).strip("-._")
-    return name or fallback
-
-
-def _parameter_variant(parameters: Any) -> str:
-    if not isinstance(parameters, dict) or not parameters:
-        return "default"
-    encoded = json.dumps(
-        parameters,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-    digest = hashlib.sha256(encoded).hexdigest()[:10]
-    readable = "variant"
-    for _, value in sorted(parameters.items()):
-        if isinstance(value, bool):
-            value = str(value).lower()
-        if isinstance(value, (str, int, float)):
-            readable = _safe_name(value, "variant")[:24]
-            break
-    return f"{readable}-{digest}"
+DEFAULT_PARAMETERS = {
+    "pano_width": 2048,
+    "perspective_size": 512,
+    "geometry_iterations": 1500,
+    "iterations": 10000,
+    "data_device": "cuda",
+}
+# Center ray is +X, image-right is -Y, and image-up is +Z in upstream code.
+OUTPUT_METADATA = {
+    "scene_coordinate_system": "FLU",
+    "scene_scale": 1.0,
+    "scene_units": "relative",
+    "scene_origin": "primary_viewpoint",
+}
 
 
-def _normalize_inputs(raw_inputs: Any) -> dict[str, dict[str, dict[str, Any]]]:
-    if raw_inputs is None:
-        return {}
-    if not isinstance(raw_inputs, dict):
-        raise ValueError("inputs must be an object")
-
-    normalized: dict[str, dict[str, dict[str, Any]]] = {}
-    for raw_role, raw_samples in raw_inputs.items():
-        role = str(raw_role).strip()
-        if not role or not isinstance(raw_samples, dict):
-            raise ValueError("each input role must contain a sample mapping")
-        samples: dict[str, dict[str, Any]] = {}
-        for raw_sample_id, raw_sample_data in raw_samples.items():
-            sample_id = str(raw_sample_id).strip()
-            if not sample_id or not isinstance(raw_sample_data, dict):
-                raise ValueError(f"inputs.{role} must map sample ids to data mappings")
-            sample_data: dict[str, Any] = {}
-            for raw_data_type, value in raw_sample_data.items():
-                data_type = str(raw_data_type).strip()
-                if not data_type:
-                    raise ValueError(f"inputs.{role}.{sample_id} contains an empty data type")
-                sample_data[data_type] = value.strip() if isinstance(value, str) else value
-            if sample_data:
-                samples[sample_id] = sample_data
-        if samples:
-            normalized[role] = samples
-    return normalized
-
-
-def _copy_inputs(
-    samples: dict[str, dict[str, Any]],
-    workspace_root: Path,
-    variant: str,
-) -> tuple[dict[str, dict[str, str]], int]:
-    output_files: dict[str, dict[str, str]] = {}
-    copied = 0
-    for sample_index, (sample_id, sample_data) in enumerate(samples.items()):
-        sample_outputs: dict[str, str] = {}
-        for data_index, (data_type, raw_path) in enumerate(sample_data.items()):
-            if not isinstance(raw_path, str):
-                continue
-            src_path = Path(raw_path)
-            if not src_path.exists() or not src_path.is_file():
-                raise FileNotFoundError(f"input file not found: {src_path}")
-            dst_name = (
-                f"input-{sample_index:02d}-{data_index:02d}-"
-                f"{_safe_role(sample_id)}-{_safe_role(data_type)}-"
-                f"{variant}{src_path.suffix}"
+def _parameters(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("parameters must be an object")
+    unknown = set(raw) - set(DEFAULT_PARAMETERS)
+    if unknown:
+        raise ValueError(f"unsupported job parameters: {sorted(unknown)}")
+    parameters = {**DEFAULT_PARAMETERS, **raw}
+    ranges = {
+        "pano_width": (256, 4096, 2),
+        "perspective_size": (128, 512, 32),
+        "geometry_iterations": (1, 1500, 1),
+        "iterations": (1, 10000, 1),
+    }
+    for name, (minimum, maximum, multiple) in ranges.items():
+        value = parameters[name]
+        if (
+            type(value) is not int
+            or not minimum <= value <= maximum
+            or value % multiple
+        ):
+            raise ValueError(
+                f"{name} must be an integer in {minimum}..{maximum}, multiple of {multiple}"
             )
-            dst_path = workspace_root / dst_name
-            shutil.copyfile(src_path, dst_path)
-            sample_outputs[data_type] = str(dst_path.relative_to(workspace_root))
-            copied += 1
-        if sample_outputs:
-            output_files[sample_id] = sample_outputs
-    return output_files, copied
+    if parameters["data_device"] not in ("cuda", "cpu"):
+        raise ValueError(
+            "data_device must be cuda or cpu; training always requires CUDA"
+        )
+    return parameters
 
 
-def _sleep_range_seconds() -> int:
-    min_seconds = int(os.getenv("TEST_RUNNER_MIN_SECONDS", "360"))
-    max_seconds = int(os.getenv("TEST_RUNNER_MAX_SECONDS", "720"))
-    if min_seconds < 0 or max_seconds < min_seconds:
-        raise ValueError("invalid TEST_RUNNER_MIN_SECONDS / TEST_RUNNER_MAX_SECONDS")
-    return random.randint(min_seconds, max_seconds)
+def _prepare_input(request: dict[str, Any], destination: Path) -> tuple[str, Path]:
+    from PIL import Image
+
+    job = request["job"]
+    if job.get("job_type") not in ("generation", "generator"):
+        raise ValueError("DreamScene360 is a generator")
+    inputs = request.get("inputs", {})
+    if not isinstance(inputs, dict) or set(inputs) - {"data"}:
+        raise ValueError("only inputs.data is supported")
+    primary = job.get("primary_sample")
+    samples = inputs.get("data", {})
+    if not isinstance(samples, dict) or list(samples) != [primary]:
+        raise ValueError("exactly one primary panorama sample is required")
+    sample = samples[primary]
+    if not isinstance(sample, dict) or not isinstance(sample.get("image"), str):
+        raise ValueError("the primary sample requires an image path")
+    source = Path(sample["image"])
+    if not source.is_absolute() or not source.is_file():
+        raise ValueError(f"image must be an existing absolute file path: {source}")
+    metadata = job.get("primary_sample_metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError("primary_sample_metadata must be an object")
+    projection = metadata.get("projection", "equirectangular")
+    if projection != "equirectangular":
+        raise ValueError("image projection must be equirectangular")
+    for name, expected in (("horizontal_fov_deg", 360), ("vertical_fov_deg", 180)):
+        if name in metadata:
+            value = metadata[name]
+            if type(value) not in (int, float) or not math.isclose(value, expected):
+                raise ValueError("a full 360 by 180 degree panorama is required")
+    with Image.open(source) as image:
+        width, height = image.size
+        if width != 2 * height or height < 64:
+            raise ValueError("image must be a full 2:1 panorama, at least 128 by 64")
+        # Upstream discovers a .png inside a writable source folder.
+        image.convert("RGB").save(destination)
+    return primary, source
 
 
-def _write_metrics_file(metrics_path: Path, summary: dict[str, Any]) -> None:
-    with metrics_path.open("w", encoding="utf-8") as handle:
-        json.dump(summary, handle, indent=2)
-        handle.write("\n")
-
-
-def _is_evaluator_mode() -> bool:
-    runner_type = os.getenv("RUNNER_TYPE", "generator").strip().lower()
-    mode = os.getenv("TEST_RUNNER_MODE", "").strip().lower()
-    return runner_type == "evaluator" or mode == "evaluator"
-
-
-def _random_evaluation_metrics() -> list[dict[str, Any]]:
+def _command(source: Path, model: Path, parameters: dict[str, Any]) -> list[str]:
     return [
-        {
-            "namespace": "quality",
-            "name": "test_quality_score",
-            "type": "float",
-            "value": round(random.uniform(0.0, 1.0), 6),
-            "unit": "score",
-            "source": "evaluator",
-        },
-        {
-            "namespace": "quality",
-            "name": "test_geometry_error",
-            "type": "float",
-            "value": round(random.uniform(0.0, 0.25), 6),
-            "unit": "normalized_error",
-            "source": "evaluator",
-        },
+        sys.executable,
+        "train.py",
+        "-s",
+        str(source),
+        "-m",
+        str(model),
+        "--pano_width",
+        str(parameters["pano_width"]),
+        "--perspective_size",
+        str(parameters["perspective_size"]),
+        "--geometry_iterations",
+        str(parameters["geometry_iterations"]),
+        "--iterations",
+        str(parameters["iterations"]),
+        "--data_device",
+        parameters["data_device"],
+        # Keep only the final export. Optimization and losses remain upstream's.
+        "--save_iterations",
+        str(parameters["iterations"]),
+        "--test_iterations",
+        str(parameters["iterations"]),
+        # Disable interactive viewer connections on the headless runner.
+        "--disable_gui",
     ]
 
 
-def run_job(job_request: dict[str, Any]) -> dict[str, Any]:
-    started_at = time.time()
-    runtime = job_request["runtime"]
-    workspace_root = Path(runtime["workspace_dir"])
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    parameters = job_request.get("job", {}).get("parameters") or {}
-    variant = _parameter_variant(parameters)
-    log_path = workspace_root / f"runner-{variant}.log"
+def _validate_ply(path: Path) -> int:
+    import numpy as np
+    from plyfile import PlyData
+
+    if not path.is_file():
+        raise RuntimeError("upstream training did not export the final Gaussian PLY")
+    vertices = PlyData.read(path)["vertex"].data
+    names = set(vertices.dtype.names or ())
+    required = {"x", "y", "z", "opacity"}
+    required.update(f"f_dc_{i}" for i in range(3))
+    required.update(f"scale_{i}" for i in range(3))
+    required.update(f"rot_{i}" for i in range(4))
+    required.update(f"f_rest_{i}" for i in range(45))
+    if not len(vertices) or not required <= names:
+        raise RuntimeError(
+            "upstream export is empty or lacks the degree-3 Gaussian fields"
+        )
+    for name in names:
+        if not np.isfinite(vertices[name]).all():
+            raise RuntimeError(f"upstream export contains non-finite {name}")
+    return len(vertices)
+
+
+def _timestamp(value: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(value))
+
+
+def run_job(request: dict[str, Any]) -> dict[str, Any]:
+    started = time.time()
+    workspace = Path(request["runtime"]["workspace_dir"])
+    workspace.mkdir(parents=True, exist_ok=True)
+    raw = request.get("job", {}).get("parameters")
+    if raw is None:
+        raw = {}
+    digest = hashlib.sha256(json.dumps(raw, sort_keys=True).encode()).hexdigest()[:10]
+    variant = f"scene-{digest}"
+    log_path = workspace / f"runner-{variant}.log"
+    monitor = None
     with tee_job_output(log_path):
-        return _run_job_logged(
-            job_request,
-            started_at,
-            workspace_root,
-            log_path,
-            variant,
-        )
-
-
-def _run_job_logged(
-    job_request: dict[str, Any],
-    started_at: float,
-    workspace_root: Path,
-    log_path: Path,
-    variant: str,
-) -> dict[str, Any]:
-    monitor: ResourceMonitor | None = None
-
-    try:
-        job = job_request["job"]
-        runtime = job_request["runtime"]
-        inputs = _normalize_inputs(job_request.get("inputs"))
-        data_samples = inputs.get("data", {})
-        monitor_data = {
-            f"{role}.{sample_id}.{data_type}": value
-            for role, samples in inputs.items()
-            for sample_id, sample_data in samples.items()
-            for data_type, value in sample_data.items()
-        }
-        monitor = ResourceMonitor(sample_data=monitor_data, output_dir=workspace_root)
-        monitor.start()
-        logger.info(
-            event_message(
-                "adapter_run_started",
-                job_id=job["job_id"],
-                batch_id=job.get("batch_id"),
-                workspace_dir=runtime["workspace_dir"],
-                input_roles=sorted(inputs),
+        try:
+            parameters = _parameters(raw)
+            source_dir = workspace / "source"
+            source_dir.mkdir()
+            primary, source = _prepare_input(request, source_dir / "panorama.png")
+            monitor = ResourceMonitor(
+                sample_data={"image": str(source)}, output_dir=workspace
             )
-        )
-
-        metrics_path = workspace_root / f"metrics-{variant}.json"
-        print(f"test runner job {job['job_id']} started", flush=True)
-
-        sleep_seconds = _sleep_range_seconds()
-        logger.info(event_message("adapter_sleeping", job_id=job["job_id"], sleep_seconds=sleep_seconds))
-        print(f"test runner sleeping for {sleep_seconds} seconds", flush=True)
-
-        time.sleep(sleep_seconds)
-        evaluator_mode = _is_evaluator_mode()
-        output_files: dict[str, dict[str, str]] = {}
-        copied_input_count = 0
-        if not evaluator_mode:
-            print("test runner copying data inputs", flush=True)
-            output_files, copied_input_count = _copy_inputs(
-                data_samples,
-                workspace_root,
-                variant,
+            monitor.start()
+            configure_weights(workspace)
+            model_dir = workspace / "model"
+            print(
+                f"Running upstream DreamScene360 train.py with {parameters}", flush=True
             )
-        logger.info(
-            event_message(
-                "adapter_inputs_copied",
-                job_id=job["job_id"],
-                copied_input_count=copied_input_count,
+            run_logged_command(
+                _command(source_dir, model_dir, parameters),
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "TQDM_MININTERVAL": "10"},
             )
-        )
-
-        evaluation_metrics = _random_evaluation_metrics() if evaluator_mode else []
-
-        resource_metrics = monitor.stop()
-        monitor = None
-        metrics = resource_metrics + evaluation_metrics
-        completed_at = time.time()
-        wall_time_ms = round((completed_at - started_at) * 1000, 3)
-        print(f"test runner copied {copied_input_count} output files", flush=True)
-        print(f"test runner completed in {wall_time_ms} ms", flush=True)
-        report: dict[str, Any] = {"inputs": inputs}
-        if output_files:
-            report["output_files"] = output_files
-        if job.get("parameters"):
-            report["parameters"] = dict(job["parameters"])
-        if evaluation_metrics:
-            report["metrics"] = evaluation_metrics
-        if resource_metrics:
-            report["resource_metrics"] = resource_metrics
-        _write_metrics_file(metrics_path, report)
-
-        logger.info(
-            event_message(
-                "adapter_run_completed",
-                job_id=job["job_id"],
-                wall_time_ms=wall_time_ms,
-                copied_input_count=copied_input_count,
+            generated = (
+                model_dir
+                / "point_cloud"
+                / f"iteration_{parameters['iterations']}"
+                / "point_cloud.ply"
             )
-        )
-
-        result = {
-            "status": "completed",
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_at)),
-            "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(completed_at)),
-            "metrics": metrics,
-            "artifacts": [
-                {
-                    "artifact_type": "job_log",
-                    "path": log_path.name,
+            count = _validate_ply(generated)
+            ply_name = f"3DGS-{variant}.ply"
+            generated.rename(workspace / ply_name)
+            outputs = {primary: {"3dgs": ply_name}}
+            metrics = monitor.stop()
+            monitor = None
+            metrics.extend(
+                [
+                    {
+                        "namespace": "model",
+                        "name": "gaussian_count",
+                        "type": "integer",
+                        "value": count,
+                        "source": "model",
+                    },
+                    {
+                        "namespace": "model",
+                        "name": "inference_steps",
+                        "type": "integer",
+                        "value": parameters["iterations"],
+                        "source": "model",
+                    },
+                ]
+            )
+            report_name = f"metrics-{variant}.json"
+            report = {
+                "inputs": request["inputs"],
+                "output_files": outputs,
+                "parameters": parameters,
+                "output_metadata": OUTPUT_METADATA,
+                "resource_metrics": metrics,
+            }
+            (workspace / report_name).write_text(json.dumps(report, indent=2) + "\n")
+            print(f"Completed with {count} Gaussians", flush=True)
+            return {
+                "status": "completed",
+                "started_at": _timestamp(started),
+                "completed_at": _timestamp(time.time()),
+                "output_files": outputs,
+                "output_metadata": OUTPUT_METADATA,
+                "metrics": metrics,
+                "artifacts": [
+                    {"artifact_type": "job_log", "path": log_path.name},
+                    {"artifact_type": "metric_summary", "path": report_name},
+                ],
+                "failure": None,
+            }
+        except Exception as exc:
+            traceback.print_exc()
+            return {
+                "status": "failed",
+                "started_at": _timestamp(started),
+                "completed_at": _timestamp(time.time()),
+                "metrics": monitor.stop() if monitor else [],
+                "artifacts": [{"artifact_type": "job_log", "path": log_path.name}],
+                "failure": {
+                    "code": "INVALID_INPUT"
+                    if isinstance(exc, ValueError)
+                    else "MODEL_ERROR",
+                    "message": str(exc),
+                    "retryable": isinstance(exc, (OSError, TimeoutError)),
+                    "stage": "adapter",
                 },
-                {
-                    "artifact_type": "metric_summary",
-                    "path": metrics_path.name,
-                },
-            ],
-            "failure": None,
-        }
-        if output_files:
-            result["output_files"] = output_files
-        return result
-    except Exception as exc:
-        resource_metrics = monitor.stop() if monitor is not None else []
-        completed_at = time.time()
-        print(f"test runner job failed: {exc}", file=sys.stderr, flush=True)
-        traceback.print_exc()
-        return {
-            "status": "failed",
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started_at)),
-            "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(completed_at)),
-            "metrics": resource_metrics,
-            "artifacts": [
-                {
-                    "artifact_type": "job_log",
-                    "path": log_path.name,
-                }
-            ],
-            "failure": {
-                "code": "TEST_RUNNER_FAILED",
-                "message": f"Test runner failed; see {log_path.name}",
-                "retryable": False,
-                "stage": "adapter",
-            },
-        }
+            }

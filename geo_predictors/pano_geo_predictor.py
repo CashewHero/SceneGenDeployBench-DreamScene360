@@ -71,9 +71,9 @@ class GeometricField(nn.Module):
 
 
 class PanoGeoPredictor(GeoPredictor):
-    def __init__(self):
+    def __init__(self, img_size=512):
         super().__init__()
-        self.depth_predictor = OmnidataPredictor()
+        self.depth_predictor = OmnidataPredictor(img_size=img_size)
 
     def grads_to_normal(self, grads):
         grads = grads.cpu()
@@ -96,7 +96,7 @@ class PanoGeoPredictor(GeoPredictor):
         normals = normals * is_inside + -normals * (1. - is_inside)
         return normals.cuda()
 
-    def __call__(self, img, gen_res=512, reg_loss_weight=1e-1,):
+    def __call__(self, img, gen_res=512, reg_loss_weight=1e-1, geometry_iterations=1500):
         '''
         :param img: [H, W, 3]
         :param ref_distance: [H, W] or [H, W, 1]
@@ -183,7 +183,7 @@ class PanoGeoPredictor(GeoPredictor):
         geo_field = GeometricField(fine_res = 2048).cuda()
 
         # Stage 1: Optimize global parameters
-        all_iter_steps = 1500
+        all_iter_steps = geometry_iterations
         lr_alpha = 1e-2
         init_lr = 1e-1
         init_lr_sp = 1e-2
@@ -263,7 +263,7 @@ class PanoGeoPredictor(GeoPredictor):
                     ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
                     loss_vis.append(ema_loss_for_log) ###
                     if iter_step % 1 == 0:
-                        progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
+                        progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"}, refresh=False)
                         progress_bar.update(1)
                     if iter_step == all_iter_steps:
                         progress_bar.close()
@@ -274,6 +274,4 @@ class PanoGeoPredictor(GeoPredictor):
         new_distances = new_distances.detach().reshape(height, width, 1)
 
         return new_distances, rot_w2c, fx, fy, cx, cy, pers_imgs
-
-
 

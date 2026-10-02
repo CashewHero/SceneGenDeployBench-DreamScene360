@@ -1,0 +1,26 @@
+{
+  "contract_version": 1,
+  "job": {
+    "job_id": "dreamscene360-smoke-1",
+    "batch_id": "dreamscene360-smoke-batch",
+    "job_type": "generation",
+    "primary_sample": "sample-1",
+    "primary_sample_metadata": {"projection": "equirectangular"},
+    "source_job_id": null,
+    "attempt": 1,
+    "timeout_seconds": 3600,
+    "parameters": {
+      "pano_width": 512,
+      "perspective_size": 128,
+      "geometry_iterations": 1500,
+      "iterations": 5500,
+      "data_device": "cpu"
+    }
+  },
+  "inputs": {
+    "data": {
+      "sample-1": {"image": "/data/datasets/smoke/dreamscene360-alley.png"}
+    }
+  },
+  "runtime": {"output_dir": "/data/output/dreamscene360@0.1.0/smoke/sample-1"}
+}

@@ -1,11 +1,18 @@
 #from transformers import AutoImageProcessor, Dinov2Model
 import torch
-from datasets import load_dataset
+import os
 from torchvision.transforms import Compose
 from torchvision import transforms
 
 
-model =  torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').cuda()
+if os.getenv('DREAMSCENE360_DINO_SOURCE'):
+    model = torch.hub.load(os.environ['DREAMSCENE360_DINO_SOURCE'], 'dinov2_vitb14',
+                           source='local', pretrained=False)
+    model.load_state_dict(torch.load(os.environ['DREAMSCENE360_DINO_CHECKPOINT'],
+                                     map_location='cpu', weights_only=True))
+    model = model.cuda()
+else:
+    model = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14').cuda()
 
 def get_Feature_from_DinoV2(tensor, model = model):
     transform = Compose([
@@ -24,7 +31,6 @@ def get_Feature_from_DinoV2(tensor, model = model):
     # print(feature)
     # print(feature[0].shape)
     return feature
-
 
 
 

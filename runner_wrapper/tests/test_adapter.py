@@ -32,6 +32,11 @@ class AdapterTests(unittest.TestCase):
         self.assertNotIn("--self_refinement", command)
         self.assertIn("--disable_gui", command)
 
+    def test_calibrated_output_metadata(self):
+        self.assertEqual(OUTPUT_METADATA["scene_scale"], 0.07)
+        self.assertEqual(OUTPUT_METADATA["scene_coordinate_system"], "FLU")
+        self.assertEqual(OUTPUT_METADATA["scene_units"], "relative")
+
     def test_bad_parameters(self):
         for raw in (
             {"iterations": True},
@@ -110,6 +115,7 @@ class AdapterTests(unittest.TestCase):
             ):
                 result = run_job(request)
             self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["output_metadata"], OUTPUT_METADATA)
             self.assertEqual(set(result["output_files"]["sample"]), {"3dgs"})
             for item in result["artifacts"]:
                 self.assertTrue((workspace / item["path"]).is_file())
@@ -120,6 +126,7 @@ class AdapterTests(unittest.TestCase):
             )
             report = json.loads((workspace / summary["path"]).read_text())
             self.assertEqual(report["output_files"], result["output_files"])
+            self.assertEqual(report["output_metadata"], result["output_metadata"])
             request["job"]["parameters"] = {"iterations": -1}
             result = run_job(request)
             self.assertEqual(result["failure"]["code"], "INVALID_INPUT")

@@ -26,7 +26,7 @@ DEFAULT_PARAMETERS = {
 # Center ray is +X, image-right is -Y, and image-up is +Z in upstream code.
 OUTPUT_METADATA = {
     "scene_coordinate_system": "FLU",
-    "scene_scale": 1.0,
+    "scene_scale": 0.07,
     "scene_units": "relative",
     "scene_origin": "primary_viewpoint",
 }
